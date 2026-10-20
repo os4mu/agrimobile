@@ -1,0 +1,30 @@
+{
+  "project_info": {
+    "project_number": "1091104385295",
+    "firebase_url": "https://agri-stock-ims-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "agri-stock-ims",
+    "storage_bucket": "agri-stock-ims.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:1091104385295:android:9a83a0abc780a2a1d2f67a",
+        "android_client_info": {
+          "package_name": "com.tsu.agristockmobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDeVgFySwpR9YgdNy3xw6Q-PDgJjHID_xk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
