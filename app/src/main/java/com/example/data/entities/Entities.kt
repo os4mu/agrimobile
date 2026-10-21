@@ -22,7 +22,8 @@ data class StaffEntity(
     val fullName: String,
     val role: String,
     val assignedWarehouse: String,
-    val status: String
+    val status: String,
+    val canStockOut: Boolean = true
 )
 
 @Entity(tableName = "scan_transactions")

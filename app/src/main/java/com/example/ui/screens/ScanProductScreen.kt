@@ -300,8 +300,8 @@ fun ScanProductScreen(
                             style = Stroke(width = 3.dp.toPx())
                         )
 
-                        // Label & Confidence Badge overlay
-                        val text = "${box.label} ${(box.confidence * 100).toInt()}%"
+                        // Label Badge overlay
+                        val text = box.label
                         val textPaint = android.graphics.Paint().apply {
                             color = android.graphics.Color.WHITE
                             textSize = 12.dp.toPx()
@@ -887,11 +887,6 @@ fun ScanProductScreen(
                                                             }
                                                         }
                                                     }
-                                                    Text(
-                                                        text = "SKU: ${productItem.sku} • ${(productItem.confidence * 100).toInt()}% Conf",
-                                                        fontSize = 11.sp,
-                                                        color = if (isExcluded) Color(0xFF9E9E9E) else AgriTextSecondary
-                                                    )
                                                 }
 
                                                 Row(verticalAlignment = Alignment.CenterVertically) {

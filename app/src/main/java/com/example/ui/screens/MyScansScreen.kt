@@ -15,12 +15,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.SyncProblem
@@ -61,6 +63,7 @@ import com.example.ui.theme.AgriWarningText
 import com.example.util.SyncUtils
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 
@@ -85,6 +88,40 @@ fun MyScansScreen(
     }
     val pendingCount = pendingScans.size
 
+    var selectedTypeFilter by remember { mutableStateOf("ALL") }
+    var selectedDateFilter by remember { mutableStateOf("ALL_TIME") }
+
+    val filteredScans = remember(recentScans, selectedTypeFilter, selectedDateFilter) {
+        val startOfToday = Calendar.getInstance().apply {
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }.timeInMillis
+
+        val startOfYesterday = startOfToday - (24 * 60 * 60 * 1000L)
+        val startOf7DaysAgo = startOfToday - (6 * 24 * 60 * 60 * 1000L)
+
+        recentScans.filter { scan ->
+            val matchesType = when (selectedTypeFilter) {
+                "IN" -> scan.scanType.equals("IN", ignoreCase = true)
+                "OUT" -> scan.scanType.equals("OUT", ignoreCase = true) ||
+                        scan.scanType.equals("STOCK_OUT", ignoreCase = true) ||
+                        scan.totalPiecesChange < 0
+                else -> true
+            }
+
+            val matchesDate = when (selectedDateFilter) {
+                "TODAY" -> scan.timestamp >= startOfToday
+                "YESTERDAY" -> scan.timestamp >= startOfYesterday && scan.timestamp < startOfToday
+                "LAST_7_DAYS" -> scan.timestamp >= startOf7DaysAgo
+                else -> true
+            }
+
+            matchesType && matchesDate
+        }
+    }
+
     GridBackground {
         Column(
             modifier = Modifier.fillMaxSize()
@@ -100,7 +137,7 @@ fun MyScansScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = "My Recent Scans",
+                    text = "Activity History",
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = AgriTextPrimary
@@ -226,7 +263,89 @@ fun MyScansScreen(
                     }
                 }
 
-                if (recentScans.isEmpty()) {
+                // Filter Chips Section
+                item {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 12.dp)
+                    ) {
+                        // Row 1: Transaction Type Chips
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            val typeOptions = listOf(
+                                "ALL" to "All Activity",
+                                "IN" to "📥 Stock In",
+                                "OUT" to "📤 Stock Out"
+                            )
+                            items(typeOptions) { (key, label) ->
+                                val isSelected = selectedTypeFilter == key
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(if (isSelected) AgriPrimaryDarkGreen else AgriSurfaceWhite)
+                                        .border(1.dp, if (isSelected) AgriPrimaryDarkGreen else AgriBorder, RoundedCornerShape(20.dp))
+                                        .clickable { selectedTypeFilter = key }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) AgriSurfaceWhite else AgriTextPrimary
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(8.dp))
+
+                        // Row 2: Date Range Chips
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            val dateOptions = listOf(
+                                "ALL_TIME" to "All Time",
+                                "TODAY" to "Today",
+                                "YESTERDAY" to "Yesterday",
+                                "LAST_7_DAYS" to "Last 7 Days"
+                            )
+                            items(dateOptions) { (key, label) ->
+                                val isSelected = selectedDateFilter == key
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(20.dp))
+                                        .background(if (isSelected) AgriPrimaryDarkGreen else AgriSurfaceWhite)
+                                        .border(1.dp, if (isSelected) AgriPrimaryDarkGreen else AgriBorder, RoundedCornerShape(20.dp))
+                                        .clickable { selectedDateFilter = key }
+                                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Text(
+                                        text = label,
+                                        fontSize = 13.sp,
+                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isSelected) AgriSurfaceWhite else AgriTextPrimary
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Record Counter Subtitle
+                        Text(
+                            text = "Showing ${filteredScans.size} of ${recentScans.size} records",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = AgriTextSecondary
+                        )
+                    }
+                }
+
+                if (filteredScans.isEmpty()) {
                     item {
                         Box(
                             modifier = Modifier
@@ -241,40 +360,56 @@ fun MyScansScreen(
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
                                 Icon(
-                                    imageVector = Icons.Default.CameraAlt,
+                                    imageVector = Icons.Default.History,
                                     contentDescription = null,
                                     tint = AgriTextSecondary,
                                     modifier = Modifier.size(48.dp)
                                 )
                                 Spacer(modifier = Modifier.height(12.dp))
                                 Text(
-                                    text = "No scans recorded yet",
+                                    text = "No activity history found",
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = AgriTextPrimary
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "Scans you log will appear here.",
+                                    text = if (recentScans.isEmpty()) "Activity you log will appear here." else "No records match the selected filters.",
                                     fontSize = 13.sp,
                                     color = AgriTextSecondary
                                 )
                                 Spacer(modifier = Modifier.height(16.dp))
-                                Button(
-                                    onClick = onNavigateToScan,
-                                    shape = RoundedCornerShape(16.dp),
-                                    colors = ButtonDefaults.buttonColors(
-                                        containerColor = AgriPrimaryDarkGreen,
-                                        contentColor = AgriSurfaceWhite
-                                    )
-                                ) {
-                                    Text("Start Scanning", fontWeight = FontWeight.Bold)
+                                if (recentScans.isNotEmpty()) {
+                                    Button(
+                                        onClick = {
+                                            selectedTypeFilter = "ALL"
+                                            selectedDateFilter = "ALL_TIME"
+                                        },
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = AgriPrimaryDarkGreen,
+                                            contentColor = AgriSurfaceWhite
+                                        )
+                                    ) {
+                                        Text("Reset Filters", fontWeight = FontWeight.Bold)
+                                    }
+                                } else {
+                                    Button(
+                                        onClick = onNavigateToScan,
+                                        shape = RoundedCornerShape(16.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = AgriPrimaryDarkGreen,
+                                            contentColor = AgriSurfaceWhite
+                                        )
+                                    ) {
+                                        Text("Start Scanning", fontWeight = FontWeight.Bold)
+                                    }
                                 }
                             }
                         }
                     }
                 } else {
-                    items(recentScans, key = { it.transactionId }) { tx ->
+                    items(filteredScans, key = { it.transactionId }) { tx ->
                         val product = allProducts.find { it.productId == tx.productId }
                         val productName = product?.productName ?: tx.productId
                         val isSynced = tx.syncStatus == "SYNCED"

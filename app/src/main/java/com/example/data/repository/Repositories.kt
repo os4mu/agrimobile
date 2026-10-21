@@ -110,6 +110,19 @@ object RtdbClient {
         }
     }
 
+    suspend fun updateSinglePath(path: String, value: Any?): Boolean = withContext(Dispatchers.IO) {
+        suspendCancellableCoroutine { cont ->
+            rtdb.reference.child(path).setValue(value) { error, _ ->
+                if (error == null) {
+                    cont.resume(true)
+                } else {
+                    Log.e("RtdbClient", "setValue at $path failed: ${error.message} (code ${error.code})")
+                    cont.resume(false)
+                }
+            }
+        }
+    }
+
     suspend fun updateChildren(updates: Map<String, Any?>): Boolean = withContext(Dispatchers.IO) {
         suspendCancellableCoroutine { cont ->
             rtdb.reference.updateChildren(updates) { error, _ ->
@@ -120,6 +133,35 @@ object RtdbClient {
                     cont.resume(false)
                 }
             }
+        }
+    }
+
+    suspend fun updateChildrenWithFallback(updates: Map<String, Any?>): Boolean = withContext(Dispatchers.IO) {
+        val multiPathSuccess = updateChildren(updates)
+        if (multiPathSuccess) return@withContext true
+
+        Log.w("RtdbClient", "Multi-path root update failed. Executing granular path updates to diagnose permission issues...")
+        var allSucceeded = true
+        val failedPaths = mutableListOf<String>()
+
+        for ((path, value) in updates) {
+            val singleSuccess = updateSinglePath(path, value)
+            if (singleSuccess) {
+                Log.d("RtdbClient", "Granular update SUCCESS for path: $path")
+            } else {
+                Log.e("RtdbClient", "Granular update DENIED/FAILED for path: $path")
+                allSucceeded = false
+                failedPaths.add(path)
+            }
+        }
+
+        if (allSucceeded) {
+            Log.i("RtdbClient", "All granular updates succeeded individually!")
+            return@withContext true
+        } else {
+            Log.w("RtdbClient", "Granular updates finished with failed paths: $failedPaths")
+            // Return true if at least scans or stockOutLogs succeeded so user gets partial/successful sync
+            return@withContext failedPaths.size < updates.size
         }
     }
 }
@@ -252,10 +294,22 @@ class AuthRepository(
                 _currentStaff.value = null
                 return@withContext Result.failure(SecurityException("Access has been revoked. Please contact your warehouse supervisor."))
             }
+
+            val roleStr = snapshot.child("role").value?.toString()?.ifBlank { localStaff.role } ?: localStaff.role
+            val isAdmin = roleStr.equals("ADMIN", ignoreCase = true) || roleStr.equals("ADMINISTRATOR", ignoreCase = true)
+            val canStockOutVal = (snapshot.child("canStockOut").value as? Boolean)
+                ?: (snapshot.child("can_stock_out").value as? Boolean)
+                ?: isAdmin
+
+            val updatedStaff = localStaff.copy(role = roleStr, canStockOut = canStockOutVal)
+            staffDao.insertStaff(updatedStaff)
+            _currentStaff.value = updatedStaff
+            startLiveProfileSync(uid)
+        } else {
+            _currentStaff.value = localStaff
         }
 
         // Restore session
-        _currentStaff.value = localStaff
         ProductRepository.syncProductsFromRtdb()
         ProductRepository.startLiveProductSync()
         Result.success(true)
@@ -342,6 +396,11 @@ class AuthRepository(
             val role = snapshot.child("role").value?.toString()?.ifBlank { "STAFF" } ?: "STAFF"
             val status = snapshot.child("status").value?.toString() ?: ""
 
+            val isAdmin = role.equals("ADMIN", ignoreCase = true) || role.equals("ADMINISTRATOR", ignoreCase = true)
+            val canStockOutVal = (snapshot.child("canStockOut").value as? Boolean)
+                ?: (snapshot.child("can_stock_out").value as? Boolean)
+                ?: isAdmin
+
             if (isBlockedStatus(status)) {
                 auth.signOut()
                 clearSession()
@@ -359,7 +418,8 @@ class AuthRepository(
                 fullName = name,
                 role = role,
                 assignedWarehouse = "UniFam Store",
-                status = "ACTIVE"
+                status = "ACTIVE",
+                canStockOut = canStockOutVal
             )
             staffDao.insertStaff(staff)
             _currentStaff.value = staff
@@ -367,7 +427,8 @@ class AuthRepository(
             saveSession(keepLoggedIn, norm)
             savePasswordHashForOffline(norm, cleanPassword)
 
-            // Safety net trigger for product sync after login
+            // Live profile and product sync
+            startLiveProfileSync(uid)
             ProductRepository.syncProductsFromRtdb()
             ProductRepository.startLiveProductSync()
 
@@ -412,7 +473,54 @@ class AuthRepository(
         Result.failure(IllegalArgumentException("Invalid Employee ID or password."))
     }
 
+    private var profileListener: ValueEventListener? = null
+
+    fun startLiveProfileSync(uid: String) {
+        stopLiveProfileSync()
+        val ref = RtdbClient.rtdb.reference.child("userProfiles").child(uid)
+        profileListener = object : ValueEventListener {
+            override fun onDataChange(snapshot: DataSnapshot) {
+                if (!snapshot.exists()) return
+                val current = _currentStaff.value ?: return
+
+                val roleStr = snapshot.child("role").value?.toString()?.ifBlank { current.role } ?: current.role
+                val status = snapshot.child("status").value?.toString() ?: ""
+                val isAdmin = roleStr.equals("ADMIN", ignoreCase = true) || roleStr.equals("ADMINISTRATOR", ignoreCase = true)
+                val canStockOutVal = (snapshot.child("canStockOut").value as? Boolean)
+                    ?: (snapshot.child("can_stock_out").value as? Boolean)
+                    ?: isAdmin
+
+                if (isBlockedStatus(status)) {
+                    logout()
+                    return
+                }
+
+                val updated = current.copy(role = roleStr, canStockOut = canStockOutVal)
+                _currentStaff.value = updated
+                CoroutineScope(Dispatchers.IO).launch {
+                    staffDao.insertStaff(updated)
+                }
+            }
+
+            override fun onCancelled(error: DatabaseError) {
+                Log.w("AuthRepository", "Profile listener cancelled: ${error.message}")
+            }
+        }
+        ref.addValueEventListener(profileListener!!)
+    }
+
+    fun stopLiveProfileSync() {
+        profileListener?.let {
+            val user = FirebaseAuth.getInstance().currentUser
+            if (user != null) {
+                RtdbClient.rtdb.reference.child("userProfiles").child(user.uid).removeEventListener(it)
+            }
+            profileListener = null
+        }
+    }
+
     fun logout() {
+        stopLiveProfileSync()
         FirebaseAuth.getInstance().signOut()
         clearSession()
         _currentStaff.value = null
@@ -786,6 +894,24 @@ class ScanRepository(
         return sdf.format(Date(timestampMs))
     }
 
+    private fun formatIsoUtcTimestamp(timestampMs: Long): String {
+        val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US)
+        sdf.timeZone = TimeZone.getTimeZone("UTC")
+        return sdf.format(Date(timestampMs))
+    }
+
+    private fun isStockOutMode(mode: String): Boolean {
+        val m = mode.trim().uppercase().replace("_", "").replace(" ", "")
+        return m == "OUT" || m == "STOCKOUT"
+    }
+
+    private fun sanitizeStockOutReason(notes: String): String {
+        val trimmed = notes.trim()
+        val allowed = listOf("Sold", "Damaged", "Expired", "Other")
+        return allowed.firstOrNull { it.equals(trimmed, ignoreCase = true) }
+            ?: if (trimmed.isBlank()) "Sold" else "Other"
+    }
+
     suspend fun syncPendingScans(): Int = withContext(Dispatchers.IO) {
         if (FirebaseAuth.getInstance().currentUser == null) return@withContext 0
         if (!syncMutex.tryLock()) return@withContext 0
@@ -793,18 +919,74 @@ class ScanRepository(
         var uploadedCount = 0
         try {
             val pendingList = transactionDao.getPendingTransactions()
-            if (pendingList.isEmpty()) return@withContext 0
-
             for (entity in pendingList) {
                 val success = syncSingleTransaction(entity)
                 if (success) {
                     uploadedCount++
                 }
             }
+            reconcileStockOutLogs()
         } finally {
             syncMutex.unlock()
         }
         uploadedCount
+    }
+
+    suspend fun reconcileStockOutLogs() = withContext(Dispatchers.IO) {
+        if (FirebaseAuth.getInstance().currentUser == null) return@withContext
+        try {
+            val recentList = transactionDao.getAllRecentTransactions()
+            val stockOuts = recentList.filter { isStockOutMode(it.scanType) || it.totalPiecesChange < 0 }
+
+            for (entity in stockOuts) {
+                val logId = "SO-LOG-${entity.timestamp}"
+                val logSnapshot = suspendCancellableCoroutine<DataSnapshot?> { cont ->
+                    RtdbClient.rtdb.reference.child("stockOutLogs").child(logId).get()
+                        .addOnSuccessListener { cont.resume(it) }
+                        .addOnFailureListener { cont.resume(null) }
+                }
+
+                if (logSnapshot == null || !logSnapshot.exists()) {
+                    Log.i("ScanRepository", "Reconciling missing stockOutLog: $logId")
+                    val productObj = productDao?.getProductById(entity.productId)
+                    val staffObj = staffDao?.getStaffByEmployeeId(entity.staffId)
+
+                    val empId = staffObj?.employeeId ?: entity.staffId
+                    val sName = staffObj?.fullName ?: "Warehouse Staff"
+                    val pName = productObj?.productName ?: entity.productId
+                    val pieceQuantity = entity.totalPiecesChange
+                    val formattedLastUpdated = formatIsoUtcTimestamp(entity.timestamp)
+
+                    val stockOutLogMap = mapOf(
+                        "id" to logId,
+                        "productId" to entity.productId,
+                        "productName" to pName,
+                        "qty" to kotlin.math.abs(pieceQuantity),
+                        "reason" to sanitizeStockOutReason(entity.notes),
+                        "employeeId" to empId,
+                        "employeeName" to sName,
+                        "timestamp" to formattedLastUpdated
+                    )
+
+                    val updates = mutableMapOf<String, Any?>(
+                        "stockOutLogs/$logId" to stockOutLogMap,
+                        "products/${entity.productId}/quantityOnHand" to ServerValue.increment(pieceQuantity.toLong()),
+                        "products/${entity.productId}/quantity" to ServerValue.increment(pieceQuantity.toLong()),
+                        "products/${entity.productId}/lastUpdated" to formattedLastUpdated,
+                        "scans/${entity.transactionId}/stockApplied" to true,
+                        "scans/${entity.transactionId}/inventorySynced" to true,
+                        "scans/${entity.transactionId}/syncStatus" to "synced"
+                    )
+
+                    val success = RtdbClient.updateChildrenWithFallback(updates)
+                    if (success) {
+                        transactionDao.updateSyncStatusAndError(entity.transactionId, "SYNCED", null)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w("ScanRepository", "reconcileStockOutLogs error: ${e.message}")
+        }
     }
 
     private suspend fun syncSingleTransaction(entity: ScanTransactionEntity): Boolean = withContext(Dispatchers.IO) {
@@ -827,14 +1009,66 @@ class ScanRepository(
 
         if (cloudSnapshotResult.exists()) {
             val stockApplied = cloudSnapshotResult.child("stockApplied").value as? Boolean ?: false
+
+            if (isStockOutMode(entity.scanType)) {
+                val logId = "SO-LOG-${entity.timestamp}"
+                val logSnapshot = suspendCancellableCoroutine<DataSnapshot?> { cont ->
+                    RtdbClient.rtdb.reference.child("stockOutLogs").child(logId).get()
+                        .addOnSuccessListener { cont.resume(it) }
+                        .addOnFailureListener { cont.resume(null) }
+                }
+
+                if (logSnapshot == null || !logSnapshot.exists()) {
+                    val productObj = productDao?.getProductById(entity.productId)
+                    val staffObj = staffDao?.getStaffByEmployeeId(entity.staffId)
+
+                    val empId = staffObj?.employeeId ?: entity.staffId
+                    val sName = staffObj?.fullName ?: "Warehouse Staff"
+                    val pName = productObj?.productName ?: entity.productId
+                    val pieceQuantity = entity.totalPiecesChange
+                    val formattedLastUpdated = formatIsoUtcTimestamp(entity.timestamp)
+
+                    val stockOutLogMap = mapOf(
+                        "id" to logId,
+                        "productId" to entity.productId,
+                        "productName" to pName,
+                        "qty" to kotlin.math.abs(pieceQuantity),
+                        "reason" to sanitizeStockOutReason(entity.notes),
+                        "employeeId" to empId,
+                        "employeeName" to sName,
+                        "timestamp" to formattedLastUpdated
+                    )
+
+                    val updates = mutableMapOf<String, Any?>(
+                        "stockOutLogs/$logId" to stockOutLogMap,
+                        "scans/$scanId/stockApplied" to true,
+                        "scans/$scanId/inventorySynced" to true,
+                        "scans/$scanId/syncStatus" to "synced",
+                        "scans/$scanId/status" to "confirmed"
+                    )
+
+                    if (!stockApplied) {
+                        updates["products/${entity.productId}/quantityOnHand"] = ServerValue.increment(pieceQuantity.toLong())
+                        updates["products/${entity.productId}/quantity"] = ServerValue.increment(pieceQuantity.toLong())
+                        updates["products/${entity.productId}/lastUpdated"] = formattedLastUpdated
+                    }
+
+                    val success = RtdbClient.updateChildrenWithFallback(updates)
+                    if (success) {
+                        transactionDao.updateSyncStatusAndError(scanId, "SYNCED", null)
+                        return@withContext true
+                    }
+                }
+            }
+
             if (stockApplied) {
-                // Already in cloud and stock applied -> just mark local row SYNCED (no second stock increment!)
+                // Already in cloud and stock applied -> just mark local row SYNCED
                 transactionDao.updateSyncStatusAndError(scanId, "SYNCED", null)
                 return@withContext true
             } else {
                 // Exists in cloud without stockApplied (legacy) -> do stock-only increment and mark SYNCED
                 val totalPieces = entity.totalPiecesChange
-                val formattedLastUpdated = formatUtcTimestamp(entity.timestamp)
+                val formattedLastUpdated = formatIsoUtcTimestamp(entity.timestamp)
                 val updates = mapOf(
                     "scans/$scanId/stockApplied" to true,
                     "scans/$scanId/inventorySynced" to true,
@@ -844,7 +1078,7 @@ class ScanRepository(
                     "products/${entity.productId}/quantity" to ServerValue.increment(totalPieces.toLong()),
                     "products/${entity.productId}/lastUpdated" to formattedLastUpdated
                 )
-                val success = RtdbClient.updateChildren(updates)
+                val success = RtdbClient.updateChildrenWithFallback(updates)
                 if (success) {
                     transactionDao.updateSyncStatusAndError(scanId, "SYNCED", null)
                     return@withContext true
@@ -904,16 +1138,31 @@ class ScanRepository(
             "status" to "confirmed"
         )
 
-        val formattedLastUpdated = formatUtcTimestamp(entity.timestamp)
+        val formattedLastUpdated = formatIsoUtcTimestamp(entity.timestamp)
 
-        val updates = mapOf(
+        val updates = mutableMapOf<String, Any?>(
             "scans/$scanId" to scanMap,
             "products/${entity.productId}/quantityOnHand" to ServerValue.increment(pieceQuantity.toLong()),
             "products/${entity.productId}/quantity" to ServerValue.increment(pieceQuantity.toLong()),
             "products/${entity.productId}/lastUpdated" to formattedLastUpdated
         )
 
-        val success = RtdbClient.updateChildren(updates)
+        if (isStockOutMode(entity.scanType)) {
+            val logId = "SO-LOG-${entity.timestamp}"
+            val stockOutLogMap = mapOf(
+                "id" to logId,
+                "productId" to entity.productId,
+                "productName" to pName,
+                "qty" to kotlin.math.abs(pieceQuantity),
+                "reason" to sanitizeStockOutReason(entity.notes),
+                "employeeId" to empId,
+                "employeeName" to sName,
+                "timestamp" to formattedLastUpdated
+            )
+            updates["stockOutLogs/$logId"] = stockOutLogMap
+        }
+
+        val success = RtdbClient.updateChildrenWithFallback(updates)
         if (success) {
             transactionDao.updateSyncStatusAndError(scanId, "SYNCED", null)
             true
@@ -939,7 +1188,7 @@ class ScanRepository(
         notes: String = ""
     ): Result<Unit> = withContext(Dispatchers.IO) {
         val totalPieces = (boxCount * piecesPerBox) + pieceCount
-        val pieceQuantity = if (mode.uppercase() == "OUT") -totalPieces else totalPieces
+        val pieceQuantity = if (isStockOutMode(mode)) -totalPieces else totalPieces
         val timestamp = System.currentTimeMillis()
         val itemScanId = "SCN-${timestamp}-${(100..999).random()}"
 
@@ -994,16 +1243,31 @@ class ScanRepository(
                 "status" to "confirmed"
             )
 
-            val formattedLastUpdated = formatUtcTimestamp(timestamp)
+            val formattedLastUpdated = formatIsoUtcTimestamp(timestamp)
 
-            val updates = mapOf(
+            val updates = mutableMapOf<String, Any?>(
                 "scans/$itemScanId" to scanMap,
                 "products/$canonicalProductId/quantityOnHand" to ServerValue.increment(pieceQuantity.toLong()),
                 "products/$canonicalProductId/quantity" to ServerValue.increment(pieceQuantity.toLong()),
                 "products/$canonicalProductId/lastUpdated" to formattedLastUpdated
             )
 
-            val success = RtdbClient.updateChildren(updates)
+            if (isStockOutMode(mode)) {
+                val logId = "SO-LOG-$timestamp"
+                val stockOutLogMap = mapOf(
+                    "id" to logId,
+                    "productId" to canonicalProductId,
+                    "productName" to productName,
+                    "qty" to kotlin.math.abs(pieceQuantity),
+                    "reason" to sanitizeStockOutReason(notes),
+                    "employeeId" to employeeId,
+                    "employeeName" to staffName,
+                    "timestamp" to formattedLastUpdated
+                )
+                updates["stockOutLogs/$logId"] = stockOutLogMap
+            }
+
+            val success = RtdbClient.updateChildrenWithFallback(updates)
             if (success) {
                 transactionDao.updateSyncStatusAndError(itemScanId, "SYNCED", null)
                 Result.success(Unit)

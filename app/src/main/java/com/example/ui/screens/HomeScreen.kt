@@ -24,8 +24,10 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Eco
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.RemoveShoppingCart
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Store
 import androidx.compose.material.icons.filled.Warning
@@ -78,6 +80,8 @@ fun HomeScreen(
     scansTodayCount: Int,
     recentScans: List<ScanTransactionEntity> = emptyList(),
     onNavigateToScan: (ProductEntity?) -> Unit,
+    onNavigateToStockOut: () -> Unit = {},
+    onNavigateToHistory: () -> Unit = {},
     onNavigateToRestockTab: () -> Unit,
     onLogout: () -> Unit
 ) {
@@ -94,6 +98,10 @@ fun HomeScreen(
     val pendingScansCount = remember(recentScans) { recentScans.count { it.syncStatus == "PENDING" } }
     val staffName = currentStaff?.fullName ?: "Staff"
     val staffId = currentStaff?.employeeId ?: "N/A"
+
+    val canStockOut = currentStaff?.canStockOut != false ||
+            currentStaff?.role.equals("ADMIN", ignoreCase = true) ||
+            currentStaff?.role.equals("ADMINISTRATOR", ignoreCase = true)
 
     GridBackground {
         Column(
@@ -262,15 +270,76 @@ fun HomeScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                    // "My Scans Today" Slim Card
+                    // "Stock Out" Card (Manual deduct) - Only shown if staff has stock-out permission
+                    if (canStockOut) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(20.dp))
+                                .background(AgriSurfaceWhite)
+                                .border(1.dp, AgriBorder, RoundedCornerShape(20.dp))
+                                .clickable { onNavigateToStockOut() }
+                                .padding(16.dp)
+                                .testTag("start_stock_out_button")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(56.dp)
+                                        .clip(RoundedCornerShape(16.dp))
+                                        .background(AgriErrorBg),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.RemoveShoppingCart,
+                                        contentDescription = null,
+                                        tint = AgriErrorText,
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.width(14.dp))
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "Stock Out",
+                                        fontSize = 18.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AgriTextPrimary
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "Deduct sold, damaged or removed items",
+                                        fontSize = 13.sp,
+                                        color = AgriTextSecondary
+                                    )
+                                }
+
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = null,
+                                    tint = AgriTextSecondary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(14.dp))
+                    }
+
+                    // "Activity History" Card
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(16.dp))
                             .background(AgriSurfaceWhite)
                             .border(1.dp, AgriBorder, RoundedCornerShape(16.dp))
+                            .clickable { onNavigateToHistory() }
                             .padding(horizontal = 16.dp, vertical = 14.dp)
                     ) {
                         Row(
@@ -278,7 +347,10 @@ fun HomeScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.weight(1f)
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .size(44.dp)
@@ -287,22 +359,30 @@ fun HomeScreen(
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Icon(
-                                        imageVector = Icons.Default.CameraAlt,
+                                        imageVector = Icons.Default.History,
                                         contentDescription = null,
                                         tint = AgriPrimaryDarkGreen,
                                         modifier = Modifier.size(22.dp)
                                     )
                                 }
                                 Spacer(modifier = Modifier.width(12.dp))
-                                Text(
-                                    text = "My Scans Today",
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = AgriTextPrimary
-                                )
+                                Column {
+                                    Text(
+                                        text = "Activity History",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = AgriTextPrimary
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = "View scan-ins and stock-outs",
+                                        fontSize = 12.sp,
+                                        color = AgriTextSecondary
+                                    )
+                                }
                             }
                             Text(
-                                text = scansTodayCount.toString(),
+                                text = recentScans.size.toString(),
                                 fontSize = 22.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = AgriPrimaryDarkGreen

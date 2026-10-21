@@ -70,6 +70,9 @@ interface ScanTransactionDao {
     @Query("SELECT * FROM scan_transactions ORDER BY timestamp DESC")
     fun getAllTransactionsFlow(): Flow<List<ScanTransactionEntity>>
 
+    @Query("SELECT * FROM scan_transactions ORDER BY timestamp DESC LIMIT 50")
+    suspend fun getAllRecentTransactions(): List<ScanTransactionEntity>
+
     @Query("SELECT * FROM scan_transactions WHERE staffId = :staffId ORDER BY timestamp DESC")
     fun getTransactionsByStaffFlow(staffId: String): Flow<List<ScanTransactionEntity>>
 

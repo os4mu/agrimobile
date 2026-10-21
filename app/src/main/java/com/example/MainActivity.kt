@@ -119,6 +119,20 @@ class MainActivity : ComponentActivity() {
                                 scanRepository.saveScanBatch(currentStaff!!, items)
                             }
                         },
+                        onSaveStockOut = { product, count, reason ->
+                            scope.launch {
+                                scanRepository.saveScanBatch(
+                                    staffId = currentStaff!!.staffId,
+                                    productId = product.productId,
+                                    canonicalProductId = product.productId,
+                                    boxCount = count,
+                                    pieceCount = 0,
+                                    piecesPerBox = 1,
+                                    mode = "OUT",
+                                    notes = reason
+                                )
+                            }
+                        },
                         onSyncNow = { onComplete ->
                             scope.launch {
                                 val count = scanRepository.syncPendingScans()

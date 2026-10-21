@@ -445,9 +445,9 @@ fun RestockProductCard(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Row 2: SKU & Category
+        // Row 2: Category
         Text(
-            text = "SKU: ${product.sku} • ${product.category}",
+            text = "Category: ${product.category}",
             fontSize = 13.sp,
             color = AgriTextSecondary
         )

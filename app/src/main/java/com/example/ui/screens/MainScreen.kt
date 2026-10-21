@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Icon
@@ -50,7 +51,8 @@ enum class Screen {
     HOME,
     RESTOCK,
     MY_SCANS,
-    SCAN_CAMERA
+    SCAN_CAMERA,
+    STOCK_OUT
 }
 
 @Composable
@@ -59,6 +61,7 @@ fun MainScreen(
     allProducts: List<ProductEntity>,
     recentScans: List<ScanTransactionEntity>,
     onSaveScanBatch: (List<ScannedItemPayload>) -> Unit,
+    onSaveStockOut: (ProductEntity, Int, String) -> Unit = { _, _, _ -> },
     onSyncNow: (onComplete: (Int) -> Unit) -> Unit = {},
     onLogout: () -> Unit
 ) {
@@ -92,7 +95,7 @@ fun MainScreen(
 
     Scaffold(
         bottomBar = {
-            if (currentScreen != Screen.SCAN_CAMERA) {
+            if (currentScreen != Screen.SCAN_CAMERA && currentScreen != Screen.STOCK_OUT) {
                 NavigationBar(
                     containerColor = AgriSurfaceWhite,
                     tonalElevation = 0.dp,
@@ -121,12 +124,12 @@ fun MainScreen(
                         modifier = Modifier.testTag("nav_home")
                     )
 
-                    // My Scans Navigation Item (CameraAlt icon)
+                    // History Navigation Item (History icon)
                     NavigationBarItem(
-                        icon = { Icon(Icons.Default.CameraAlt, contentDescription = "My Scans") },
+                        icon = { Icon(Icons.Default.History, contentDescription = "History") },
                         label = {
                             Text(
-                                text = "My Scans",
+                                text = "History",
                                 fontWeight = if (currentScreen == Screen.MY_SCANS) FontWeight.Bold else FontWeight.Normal
                             )
                         },
@@ -209,6 +212,12 @@ fun MainScreen(
                     onNavigateToScan = { _ ->
                         currentScreen = Screen.SCAN_CAMERA
                     },
+                    onNavigateToStockOut = {
+                        currentScreen = Screen.STOCK_OUT
+                    },
+                    onNavigateToHistory = {
+                        currentScreen = Screen.MY_SCANS
+                    },
                     onNavigateToRestockTab = { currentScreen = Screen.RESTOCK },
                     onLogout = onLogout
                 )
@@ -239,6 +248,15 @@ fun MainScreen(
                     onSaveScanBatch = { items ->
                         onSaveScanBatch(items)
                         currentScreen = Screen.MY_SCANS
+                    }
+                )
+
+                Screen.STOCK_OUT -> StockOutScreen(
+                    allProducts = allProducts,
+                    currentStaff = currentStaff,
+                    onBackClick = { currentScreen = Screen.HOME },
+                    onConfirmDeduction = { product, count, reason ->
+                        onSaveStockOut(product, count, reason)
                     }
                 )
             }

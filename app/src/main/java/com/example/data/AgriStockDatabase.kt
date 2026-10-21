@@ -25,7 +25,7 @@ import kotlinx.coroutines.launch
         ScanTransactionEntity::class,
         WarehouseSettingEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AgriStockDatabase : RoomDatabase() {
@@ -45,6 +45,7 @@ abstract class AgriStockDatabase : RoomDatabase() {
                     AgriStockDatabase::class.java,
                     "agri_stock_database"
                 )
+                    .fallbackToDestructiveMigration()
                     .addCallback(DatabaseCallback(context.applicationContext))
                     .build()
                 INSTANCE = instance
